@@ -8,6 +8,7 @@ const app = express();
 
 const ticketRoutes = require("./routes/ticketRoutes");
 const authRoutes = require("./routes/authRoutes");
+const feedbackRoutes = require("./routes/feedbackRoutes");
 const authenticateToken = require("./middleware/authMiddleware");
 
 app.use(cors());
@@ -21,8 +22,9 @@ app.get("/", (req, res) => {
     });
 });
 
-// Public authentication routes
+// Public routes
 app.use("/api/auth", authRoutes);
+app.use("/api/feedback", feedbackRoutes);
 
 // Protected ticket routes
 app.use("/api/tickets", authenticateToken, ticketRoutes);

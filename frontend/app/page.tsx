@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Analytics from "./components/Analytics";
+import AgentPerformance from "./components/AgentPerformance";
 
 type Ticket = {
   _id: string;
@@ -17,9 +18,18 @@ type Ticket = {
   status: string;
   assignedAgent: string;
   createdAt?: string;
+  slaDueAt?: string;
+  slaStatus?: string;
+  resolvedAt?: string;
 };
 
 const API = "http://localhost:5000/api/tickets";
+
+const slaHours: Record<string, number> = {
+  High: 4,
+  Medium: 24,
+  Low: 48,
+};
 
 export default function Home() {
   const router = useRouter();
@@ -52,6 +62,58 @@ export default function Home() {
     localStorage.removeItem("supportai_token");
     localStorage.removeItem("supportai_admin");
     router.replace("/login");
+  }
+
+  // Calculate deadline for older tickets if missing
+  function getSlaDeadline(ticket: Ticket): Date | null {
+    if (ticket.slaDueAt) {
+      return new Date(ticket.slaDueAt);
+    }
+
+    if (!ticket.createdAt) return null;
+
+    const hours = slaHours[ticket.priority] || 24;
+
+    return new Date(
+      new Date(ticket.createdAt).getTime() + hours * 60 * 60 * 1000
+    );
+  }
+
+  function getCurrentSlaStatus(ticket: Ticket): string {
+    if (ticket.slaStatus) return ticket.slaStatus;
+
+    const deadline = getSlaDeadline(ticket);
+
+    if (!deadline) return "Unknown";
+
+    if (ticket.status === "Resolved") {
+      if (!ticket.resolvedAt) return "Unknown";
+
+      return new Date(ticket.resolvedAt) <= deadline
+        ? "Met"
+        : "Breached";
+    }
+
+    return new Date() > deadline ? "Breached" : "On Track";
+  }
+
+  function formatDate(date: Date | null) {
+    if (!date || isNaN(date.getTime())) return "Not available";
+
+    return date.toLocaleString();
+  }
+
+  function getSlaColor(status: string) {
+    switch (status) {
+      case "Met":
+        return "bg-green-900 text-green-300";
+      case "Breached":
+        return "bg-red-900 text-red-300";
+      case "On Track":
+        return "bg-sky-900 text-sky-300";
+      default:
+        return "bg-slate-700 text-slate-300";
+    }
   }
 
   async function fetchTickets() {
@@ -289,6 +351,24 @@ export default function Home() {
   const resolved = tickets.filter(t => t.status === "Resolved").length;
   const high = tickets.filter(t => t.priority === "High").length;
 
+  const breached = tickets.filter(
+    t => getCurrentSlaStatus(t) === "Breached"
+  ).length;
+
+  const slaMet = tickets.filter(
+    t => t.status === "Resolved" &&
+      getCurrentSlaStatus(t) === "Met"
+  ).length;
+
+  const resolvedSlaCount = tickets.filter(
+    t => t.status === "Resolved" &&
+      ["Met", "Breached"].includes(getCurrentSlaStatus(t))
+  ).length;
+
+  const slaCompliance = resolvedSlaCount > 0
+    ? Math.round((slaMet / resolvedSlaCount) * 100)
+    : 0;
+
   return (
     <main className="min-h-screen bg-slate-950 px-4 py-8 text-white md:px-8">
       <div className="mx-auto max-w-7xl">
@@ -334,7 +414,7 @@ export default function Home() {
           </p>
         )}
 
-        {/* Statistics */}
+        {/* Ticket Statistics */}
         <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {[
             { title: "Total Tickets", value: total },
@@ -353,6 +433,45 @@ export default function Home() {
               </p>
             </div>
           ))}
+        </section>
+
+        {/* SLA Statistics */}
+        <section className="mb-8">
+          <h2 className="mb-4 text-xl font-bold text-sky-300">
+            SLA Monitoring
+          </h2>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="rounded-xl border border-red-800 bg-slate-900 p-5">
+              <p className="text-sm text-slate-400">SLA Breached</p>
+              <p className="mt-2 text-3xl font-bold text-red-400">
+                {breached}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Tickets past their SLA deadline or resolved late
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-green-800 bg-slate-900 p-5">
+              <p className="text-sm text-slate-400">SLA Met</p>
+              <p className="mt-2 text-3xl font-bold text-green-400">
+                {slaMet}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Resolved within the deadline
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-sky-800 bg-slate-900 p-5">
+              <p className="text-sm text-slate-400">SLA Compliance</p>
+              <p className="mt-2 text-3xl font-bold text-sky-400">
+                {slaCompliance}%
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Based on resolved tickets with known SLA results
+              </p>
+            </div>
+          </div>
         </section>
 
         {/* Create Ticket */}
@@ -409,6 +528,9 @@ export default function Home() {
         {/* Analytics */}
         <Analytics tickets={tickets} />
 
+        {/* Agent Performance */}
+        <AgentPerformance tickets={tickets} />
+
         {/* Ticket List */}
         <section className="mt-8">
           <h2 className="mb-5 text-2xl font-bold">
@@ -457,90 +579,107 @@ export default function Home() {
             </p>
           ) : (
             <div className="space-y-4">
-              {filteredTickets.map((ticket) => (
-                <article
-                  key={ticket._id}
-                  className="rounded-xl border border-slate-700 bg-slate-900 p-5"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <h3 className="text-lg font-bold text-sky-300">
-                        {ticket.subject}
-                      </h3>
-                      <p className="mt-1 text-sm text-slate-400">
-                        {ticket.customerName} · {ticket.email}
+              {filteredTickets.map((ticket) => {
+                const slaStatus = getCurrentSlaStatus(ticket);
+                const slaDeadline = getSlaDeadline(ticket);
+
+                return (
+                  <article
+                    key={ticket._id}
+                    className="rounded-xl border border-slate-700 bg-slate-900 p-5"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-bold text-sky-300">
+                          {ticket.subject}
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-400">
+                          {ticket.customerName} · {ticket.email}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className="rounded-full bg-sky-900 px-3 py-1 text-sky-300">
+                          {ticket.category}
+                        </span>
+                        <span className="rounded-full bg-amber-900 px-3 py-1 text-amber-300">
+                          {ticket.priority}
+                        </span>
+                        <span className={`rounded-full px-3 py-1 ${getSlaColor(slaStatus)}`}>
+                          SLA: {slaStatus}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="my-4 text-slate-300">
+                      {ticket.message}
+                    </p>
+
+                    <div className="mb-4 rounded-lg border border-slate-700 bg-slate-800/60 p-3">
+                      <p className="text-sm text-slate-400">
+                        SLA Deadline
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-sky-300">
+                        {formatDate(slaDeadline)}
                       </p>
                     </div>
 
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full bg-sky-900 px-3 py-1 text-sky-300">
-                        {ticket.category}
-                      </span>
-                      <span className="rounded-full bg-amber-900 px-3 py-1 text-amber-300">
-                        {ticket.priority}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-3 border-t border-slate-700 pt-4">
+                      <label className="text-sm text-slate-400">
+                        Status:
+                      </label>
+
+                      <select
+                        value={ticket.status}
+                        onChange={(e) =>
+                          updateTicket(ticket._id, "status", e.target.value)
+                        }
+                        className="rounded-lg border border-slate-700 bg-slate-800 p-2 text-sm"
+                      >
+                        <option value="Open">Open</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Resolved">Resolved</option>
+                      </select>
+
+                      <label className="text-sm text-slate-400">
+                        Agent:
+                      </label>
+
+                      <select
+                        value={ticket.assignedAgent || "Unassigned"}
+                        onChange={(e) =>
+                          updateTicket(
+                            ticket._id,
+                            "assignedAgent",
+                            e.target.value
+                          )
+                        }
+                        className="rounded-lg border border-slate-700 bg-slate-800 p-2 text-sm"
+                      >
+                        <option value="Unassigned">Unassigned</option>
+                        <option value="Agent 1">Agent 1</option>
+                        <option value="Agent 2">Agent 2</option>
+                        <option value="Agent 3">Agent 3</option>
+                      </select>
+
+                      <button
+                        onClick={() => setSelectedTicket(ticket)}
+                        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500"
+                      >
+                        View Details
+                      </button>
+
+                      <button
+                        onClick={() => deleteTicket(ticket._id)}
+                        disabled={deletingId === ticket._id}
+                        className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-600 disabled:opacity-50"
+                      >
+                        {deletingId === ticket._id ? "Deleting..." : "Delete"}
+                      </button>
                     </div>
-                  </div>
-
-                  <p className="my-4 text-slate-300">
-                    {ticket.message}
-                  </p>
-
-                  <div className="flex flex-wrap items-center gap-3 border-t border-slate-700 pt-4">
-                    <label className="text-sm text-slate-400">
-                      Status:
-                    </label>
-
-                    <select
-                      value={ticket.status}
-                      onChange={(e) =>
-                        updateTicket(ticket._id, "status", e.target.value)
-                      }
-                      className="rounded-lg border border-slate-700 bg-slate-800 p-2 text-sm"
-                    >
-                      <option value="Open">Open</option>
-                      <option value="In Progress">In Progress</option>
-                      <option value="Resolved">Resolved</option>
-                    </select>
-
-                    <label className="text-sm text-slate-400">
-                      Agent:
-                    </label>
-
-                    <select
-                      value={ticket.assignedAgent || "Unassigned"}
-                      onChange={(e) =>
-                        updateTicket(
-                          ticket._id,
-                          "assignedAgent",
-                          e.target.value
-                        )
-                      }
-                      className="rounded-lg border border-slate-700 bg-slate-800 p-2 text-sm"
-                    >
-                      <option value="Unassigned">Unassigned</option>
-                      <option value="Agent 1">Agent 1</option>
-                      <option value="Agent 2">Agent 2</option>
-                      <option value="Agent 3">Agent 3</option>
-                    </select>
-
-                    <button
-                      onClick={() => setSelectedTicket(ticket)}
-                      className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500"
-                    >
-                      View Details
-                    </button>
-
-                    <button
-                      onClick={() => deleteTicket(ticket._id)}
-                      disabled={deletingId === ticket._id}
-                      className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold hover:bg-red-600 disabled:opacity-50"
-                    >
-                      {deletingId === ticket._id ? "Deleting..." : "Delete"}
-                    </button>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
@@ -614,6 +753,20 @@ export default function Home() {
                     <p className="text-sm text-slate-400">Assigned Agent</p>
                     <p>{selectedTicket.assignedAgent || "Unassigned"}</p>
                   </div>
+
+                  <div>
+                    <p className="text-sm text-slate-400">SLA Status</p>
+                    <span className={`mt-1 inline-block rounded-full px-3 py-1 text-sm ${getSlaColor(getCurrentSlaStatus(selectedTicket))}`}>
+                      {getCurrentSlaStatus(selectedTicket)}
+                    </span>
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-slate-400">SLA Deadline</p>
+                    <p className="text-sm">
+                      {formatDate(getSlaDeadline(selectedTicket))}
+                    </p>
+                  </div>
                 </div>
 
                 {selectedTicket.createdAt && (
@@ -621,6 +774,15 @@ export default function Home() {
                     <p className="text-sm text-slate-400">Created At</p>
                     <p>
                       {new Date(selectedTicket.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                )}
+
+                {selectedTicket.resolvedAt && (
+                  <div>
+                    <p className="text-sm text-slate-400">Resolved At</p>
+                    <p>
+                      {new Date(selectedTicket.resolvedAt).toLocaleString()}
                     </p>
                   </div>
                 )}

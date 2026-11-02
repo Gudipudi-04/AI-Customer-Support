@@ -39,6 +39,55 @@ const ticketSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+
+    // SLA Tracking
+    slaDueAt: {
+        type: Date
+    },
+    slaStatus: {
+        type: String,
+        enum: ["On Track", "Breached", "Met"],
+        default: "On Track"
+    },
+    resolvedAt: {
+        type: Date
+    },
+
+    // Customer Satisfaction
+    rating: {
+        type: Number,
+        min: 1,
+        max: 5,
+        default: null
+    },
+    feedback: {
+        type: String,
+        trim: true,
+        maxlength: 1000,
+        default: ""
+    },
+    feedbackSubmittedAt: {
+        type: Date,
+        default: null
+    }
+});
+
+// Automatically calculate SLA deadline
+ticketSchema.pre("validate", function () {
+    if (this.isNew || this.isModified("priority") || !this.slaDueAt) {
+        const slaHours = {
+            High: 4,
+            Medium: 24,
+            Low: 48
+        };
+
+        const hours = slaHours[this.priority] || 24;
+        const created = this.createdAt || new Date();
+
+        this.slaDueAt = new Date(
+            created.getTime() + hours * 60 * 60 * 1000
+        );
     }
 });
 
